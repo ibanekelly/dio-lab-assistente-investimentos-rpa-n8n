@@ -1,0 +1,445 @@
+{
+  "name": "Desafio de Projeto DIO",
+  "nodes": [
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{$json}}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        2368,
+        -16
+      ],
+      "id": "f3842d00-faeb-44ca-8b6f-ef6344cbd9f3",
+      "name": "Respond to Webhook"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "Clientes",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "6342e188-ca68-4ed3-8f5a-13a1975db810",
+      "name": "Puxa clientes",
+      "webhookId": "f321ed60-769e-4c77-a0eb-5b0a232302f8"
+    },
+    {
+      "parameters": {
+        "url": "https://digitalinnovationone.github.io/dio-lab-assistente-investimentos-rpa-n8n/data.csv",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        192,
+        0
+      ],
+      "id": "a60914d8-e2fb-41ae-8865-875f3a13b3fe",
+      "name": "Puxa investimentos"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pega o CSV como texto vindo do HTTP Request\nconst csvRaw = $json.data ?? $json.body ?? $json;\nconst text = (typeof csvRaw === \"string\") ? csvRaw : JSON.stringify(csvRaw);\n\nconst lines = text.split(/\\r?\\n/).map(l => l.trim()).filter(Boolean);\nconst headers = lines[0].split(\",\").map(h => h.trim());\n\nconst investimentos = lines.slice(1).map(line => {\n  const cols = line.split(\",\").map(c => c.trim());\n  const obj = {};\n  headers.forEach((h, i) => obj[h] = cols[i] ?? \"\");\n\n  // normaliza minimo para número\n  obj.minimo = Number(String(obj.minimo).replace(/[^\\d]/g, \"\")) || 0;\n\n  return obj;\n});\n\nreturn [{ json: { investimentos } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        384,
+        0
+      ],
+      "id": "12aedde3-36e1-4be9-8a03-996c16c997fc",
+      "name": "Organiza investimentos"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        592,
+        -176
+      ],
+      "id": "dca15e9a-f9f1-4856-84f9-2474db1f2241",
+      "name": "Junta clientes e investimentos"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ===== 1) Ler os dados que vieram do Merge =====\nconst itens = $input.all().map(i => i.json);\n\nlet clientes = [];\nlet investimentos = [];\n\nfor (const it of itens) {\n  if (Array.isArray(it.body?.clientes)) clientes = it.body.clientes;\n  else if (Array.isArray(it.clientes)) clientes = it.clientes;\n\n  if (Array.isArray(it.investimentos)) investimentos = it.investimentos;\n}\n\n// ===== 2) Funções auxiliares =====\nconst pick = (lista) => lista[Math.floor(Math.random() * lista.length)];\n\n// \"R$ 12.500,00\" -> 12500\nconst paraNumero = (txt) =>\n  Number(String(txt).replace(/[^\\d,]/g, \"\").replace(\",\", \".\")) || 0;\n\n// 12500 -> \"R$ 12.500,00\"\nconst paraReal = (n) =>\n  n.toLocaleString(\"pt-BR\", { style: \"currency\", currency: \"BRL\" })\n   .replace(/\\u00a0/g, \" \");\n\n// ===== 3) Gerar a recomendação de cada cliente =====\nconst resultados = clientes.map((c) => {\n  const nome = c.nome;\n  const email = c.email;\n  const perfil = c.perfil;\n  const saldoNum = paraNumero(c.saldo);\n\n  // produtos do mesmo perfil do cliente\n  const doPerfil = investimentos.filter((p) => p.perfil === perfil);\n\n  // produtos que o saldo consegue pagar\n  const elegiveis = doPerfil.filter((p) => Number(p.minimo) <= saldoNum);\n\n  let escolhido = null;\n  let motivo = \"\";\n\n  if (elegiveis.length > 0) {\n    // REGRA: maior mínimo que o saldo alcança\n    // (para escolher o de maior rentabilidade, mude a ordenação aqui)\n    escolhido = elegiveis.sort((a, b) => b.minimo - a.minimo)[0];\n    motivo = \"saldo_ok\";\n  } else if (doPerfil.length > 0) {\n    // saldo menor que todos os mínimos: sugere o mais acessível\n    escolhido = doPerfil.sort((a, b) => a.minimo - b.minimo)[0];\n    motivo = \"saldo_insuficiente\";\n  } else {\n    motivo = \"sem_produto_para_o_perfil\";\n  }\n\n  // ===== 4) Mensagens (3 variações) =====\n  let mensagens = [];\n\n  if (escolhido && motivo === \"saldo_ok\") {\n    const prod = escolhido.produto;\n    const min = paraReal(Number(escolhido.minimo));\n    const saldo = paraReal(saldoNum);\n    const rent = escolhido.rentabilidade;\n\n    mensagens = [\n      `Olá ${nome}! Pelo seu perfil (${perfil}), uma boa opção é **${prod}** (mínimo ${min}). Com seu saldo atual (${saldo}), você já consegue investir. Rentabilidade: ${rent}.`,\n      `Oi ${nome}! Recomendação para perfil ${perfil}: **${prod}** (mínimo ${min}). Seu saldo (${saldo}) já atende o mínimo. Rentabilidade: ${rent}.`,\n      `${nome}, indo direto ao ponto: para o perfil ${perfil}, **${prod}** (mínimo ${min}). Você tem ${saldo}, então dá pra aplicar. Rentabilidade: ${rent}.`\n    ];\n  } else if (escolhido && motivo === \"saldo_insuficiente\") {\n    const prod = escolhido.produto;\n    const min = paraReal(Number(escolhido.minimo));\n    const saldo = paraReal(saldoNum);\n\n    mensagens = [\n      `Olá ${nome}! Para o perfil ${perfil}, a opção mais acessível é **${prod}** (mínimo ${min}). Seu saldo atual (${saldo}) ainda não alcança esse valor, mas falta pouco para começar.`,\n      `Oi ${nome}! Seu saldo (${saldo}) ainda está abaixo do mínimo de **${prod}** (${min}), a opção inicial do perfil ${perfil}. Vale juntar mais um pouco.`,\n      `${nome}, por enquanto o saldo (${saldo}) não cobre o mínimo de ${min} do **${prod}** (perfil ${perfil}). Assim que chegar lá, é a melhor porta de entrada.`\n    ];\n  } else {\n    mensagens = [\n      `Olá ${nome}! Não encontramos um produto para o perfil ${perfil} no momento.`\n    ];\n  }\n\n  return {\n    nome,\n    email,\n    perfil,\n    saldo_texto: c.saldo,\n    saldo_num: saldoNum,\n    recomendacao: escolhido,\n    motivo,\n    mensagens,\n    mensagem_escolhida: pick(mensagens)\n  };\n});\n\n// ===== 5) Saída =====\nreturn [{\n  json: {\n    ok: true,\n    total_clientes: resultados.length,\n    total_investimentos: investimentos.length,\n    resultados\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        800,
+        0
+      ],
+      "id": "8e5d690b-3cc7-4f5f-b75b-43bcd8205f98",
+      "name": "Mensagens personalizadas"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pega o array \"resultados\" gerado no Code anterior\nconst resultados = $json.resultados || [];\n\nfunction parseBRL(valor) {\n  if (!valor) return 0;\n  const s = String(valor)\n    .replace(\"R$\", \"\")\n    .replace(/\\./g, \"\")\n    .replace(\",\", \".\")\n    .trim();\n  const n = Number(s);\n  return Number.isFinite(n) ? n : 0;\n}\n\n// retorna UM ITEM por cliente\nconst out = resultados.map(c => {\n  const saldoNum = c.saldo_num ?? parseBRL(c.saldo_texto ?? c.saldo);\n\n  return {\n    json: {\n      email_to: c.email,\n      nome: c.nome,\n      perfil: c.perfil,\n      saldo_texto: c.saldo_texto,\n      saldo_num: saldoNum,\n      recomendacao: c.recomendacao,\n      motivo: c.motivo,\n      mensagem_escolhida: c.mensagem_escolhida\n    }\n  };\n});\n\nreturn out;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1024,
+        0
+      ],
+      "id": "eede5ab2-2d2e-427a-8203-fa38948c03ef",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ===== Code in JavaScript1 =====\n// Espera itens vindos do Merge (dados do cliente + resposta da IA, combinados por posição)\n\nconst items = $input.all();\n\nconst out = items.map((item) => {\n  const j = item.json;\n\n  // ===== 1) Pega o texto bruto gerado pela IA =====\n  // O Basic LLM Chain devolve em \"text\"; outros nós de IA podem usar \"content\" ou \"output_text\"\n  const rawText = j.text ?? j.content ?? j.output_text ?? j.output ?? \"\";\n\n  // ===== 2) Tenta converter o texto em JSON =====\n  let parsed = {};\n  let ok = true;\n\n  try {\n    const limpo = String(rawText)\n      .replace(/```json/gi, \"\")\n      .replace(/```/g, \"\")\n      .trim();\n\n    parsed = JSON.parse(limpo);\n  } catch (e) {\n    ok = false;\n    parsed = {\n      subject: \"Erro ao gerar e-mail\",\n      text_body: \"Não foi possível interpretar a resposta da IA.\",\n      html_body: \"<p>Não foi possível interpretar a resposta da IA.</p>\"\n    };\n  }\n\n  // ===== 3) Pega os dados do cliente (vindos do lado do Merge que tem email_to, nome, etc.) =====\n  const to = j.email_to ?? j.email ?? j.to ?? \"\";\n  const nome = j.nome ?? \"\";\n  const perfil = j.perfil ?? \"\";\n\n  const subject = parsed.subject ?? \"\";\n  const text_body = parsed.text_body ?? \"\";\n  const html_body = parsed.html_body ?? \"\";\n\n  // ===== 4) Monta o item final =====\n  return {\n    json: {\n      ok,\n      to,\n      subject,\n      text_body,\n      html_body,\n\n      // (opcional) manter alguns campos úteis pra debug/aula\n      meta: {\n        nome,\n        perfil,\n        produto: j.recomendacao?.produto,\n        minimo: j.recomendacao?.minimo,\n        rentabilidade: j.recomendacao?.rentabilidade,\n        motivo: j.motivo\n      }\n    }\n  };\n});\n\nreturn out;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1808,
+        0
+      ],
+      "id": "811e7ee1-d772-43b6-ae1d-617408843c24",
+      "name": "Code in JavaScript1"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "message": "={{ $json.html_body }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        2192,
+        -16
+      ],
+      "id": "2e587446-9bab-4c18-a5cb-8bfdb48c43f6",
+      "name": "Send a message",
+      "webhookId": "1e8486b4-b3fa-4143-8ef1-70a829336150",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "5UGYhYuxjosXnwUG",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Escreva um e-mail curto em pt-BR para o cliente abaixo, sem prometer ganhos e sem garantias.\n\nCliente:\nNome: {{ $json.nome }}\nPerfil: {{ $json.perfil }}\nSaldo disponível: {{ $json.saldo_texto }}\n\nRecomendação:\nProduto: {{ $json.recomendacao.produto }}\nValor mínimo: R$ {{ $json.recomendacao.minimo }}\nRentabilidade: {{ $json.recomendacao.rentabilidade }}\n\nMensagem base (use como referência de conteúdo, mas reescreva com suas próprias palavras):\n{{ $json.mensagem_base }}\n\nRegras:\n- Idioma: {{ $json.copy_rules.idioma }}\n- Tom: {{ $json.copy_rules.tom }}\n- Tamanho: {{ $json.copy_rules.tamanho }}\n- Evite: {{ $json.copy_rules.evitar.join(\", \") }}\n\nResponda apenas em JSON, no formato abaixo, sem texto fora do JSON, sem usar blocos de código markdown:\n{\n  \"subject\": \"assunto curto do e-mail\",\n  \"text_body\": \"corpo do e-mail em texto simples\",\n  \"html_body\": \"corpo do e-mail em HTML simples, com parágrafos <p> e negrito <strong> onde fizer sentido\"\n}",
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        1264,
+        -176
+      ],
+      "id": "4de17157-0c3e-4a28-a0e4-2d55623fe273",
+      "name": "Basic LLM Chain"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1632,
+        0
+      ],
+      "id": "3b8ce082-d047-46a4-86a3-9c23cdd88a96",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "9d405ef8-6a9f-4ac9-804e-c8b26d081403",
+              "leftValue": "={{ $json.to }}",
+              "rightValue": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2000,
+        0
+      ],
+      "id": "d3ef6b5e-6af9-47e7-96b9-17c9b4dd36d8",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pega todos os itens que caíram no ramo \"false\" (e-mail inválido)\nconst items = $input.all();\n\nconst linhas = items.map((item, i) => {\n  const j = item.json;\n  const nome = j.meta?.nome ?? \"Nome não informado\";\n  const to = j.to || \"(vazio)\";\n  return `${i + 1}. ${nome} — e-mail: ${to}`;\n});\n\nconst corpo_texto =\n  `Os seguintes clientes tiveram o e-mail de recomendação não enviado por endereço inválido:\\n\\n` +\n  linhas.join(\"\\n\") +\n  `\\n\\nTotal: ${items.length} cliente(s). Revise os cadastros na planilha.`;\n\nconst corpo_html =\n  `<p>Os seguintes clientes tiveram o e-mail de recomendação <strong>não enviado</strong> por endereço inválido:</p>` +\n  `<ul>` +\n  items.map((item) => {\n    const j = item.json;\n    const nome = j.meta?.nome ?? \"Nome não informado\";\n    const to = j.to || \"(vazio)\";\n    return `<li>${nome} — e-mail: ${to}</li>`;\n  }).join(\"\") +\n  `</ul>` +\n  `<p>Total: <strong>${items.length}</strong> cliente(s). Revise os cadastros na planilha.</p>`;\n\nreturn [{\n  json: {\n    subject: `Alerta: ${items.length} e-mail(s) inválido(s) no envio de recomendações`,\n    text_body: corpo_texto,\n    html_body: corpo_html\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2192,
+        144
+      ],
+      "id": "82144756-2be0-41f1-99e9-b8c8957c4903",
+      "name": "Code in JavaScript2"
+    },
+    {
+      "parameters": {
+        "sendTo": "ibanekelly@gmail.com",
+        "subject": "={{ $json.subject }}",
+        "message": "={{ $json.text_body }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        2368,
+        144
+      ],
+      "id": "716c4b18-5e0c-49e4-aff7-7e194afe0ea0",
+      "name": "Send a message1",
+      "webhookId": "cca293dd-7799-4c64-8e60-83434e2791da",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "5UGYhYuxjosXnwUG",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "openai/gpt-oss-20b",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        1264,
+        16
+      ],
+      "id": "482c7308-9eaa-4604-9493-94f8622f47a3",
+      "name": "Gera email",
+      "credentials": {
+        "groqApi": {
+          "id": "VyCr5T95uDJu8Idm",
+          "name": "Groq account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Respond to Webhook": {
+      "main": [
+        []
+      ]
+    },
+    "Puxa clientes": {
+      "main": [
+        [
+          {
+            "node": "Puxa investimentos",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Junta clientes e investimentos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Puxa investimentos": {
+      "main": [
+        [
+          {
+            "node": "Organiza investimentos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Organiza investimentos": {
+      "main": [
+        [
+          {
+            "node": "Junta clientes e investimentos",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Junta clientes e investimentos": {
+      "main": [
+        [
+          {
+            "node": "Mensagens personalizadas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mensagens personalizadas": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Basic LLM Chain",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send a message": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Basic LLM Chain": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code in JavaScript2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript2": {
+      "main": [
+        [
+          {
+            "node": "Send a message1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gera email": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Basic LLM Chain",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "5d6068bb-550d-447d-939b-4eaed5f8ca94",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "c460025bbcb7d4e868fb1975283342811ffee790f981637eacd6e27d3eddffed"
+  },
+  "nodeGroups": [],
+  "id": "VbwBodiKd0sxgrHH",
+  "tags": []
+}
